@@ -1,0 +1,35 @@
+{
+  "scenarios": 6,
+  "results": [
+    {
+      "checkpoint": "append_written",
+      "passed": true,
+      "recovered_keys": 3
+    },
+    {
+      "checkpoint": "append_synced",
+      "passed": true,
+      "recovered_keys": 3
+    },
+    {
+      "checkpoint": "compact_written",
+      "passed": true,
+      "recovered_keys": 3
+    },
+    {
+      "checkpoint": "compact_synced",
+      "passed": true,
+      "recovered_keys": 3
+    },
+    {
+      "checkpoint": "compact_replaced",
+      "passed": true,
+      "recovered_keys": 3
+    },
+    {
+      "checkpoint": "directory_synced",
+      "passed": true,
+      "recovered_keys": 3
+    }
+  ]
+}

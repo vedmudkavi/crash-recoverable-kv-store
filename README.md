@@ -72,6 +72,55 @@ key is harmless. A batch is recorded as one frame and replayed in full or not at
 all after a truncated write. This is atomic batching, not an interactive SQL
 transaction system.
 
+## Conditional updates, pagination, and CLI batches
+
+Compare-and-swap prevents lost updates when threads share a database instance:
+
+```python
+with Database(".kvstore") as db:
+    db.compare_and_swap("counter", None, "0")  # create only when absent
+    while True:
+        old = db.get("counter")
+        if db.compare_and_swap("counter", old, str(int(old) + 1)):
+            break
+```
+
+The comparison and durable commit hold the same mutex. A mismatch returns `False`
+without appending to the WAL. `expected=None` means absent; `value=None` deletes a
+matching key. Empty strings remain ordinary values. Matching an absent key with
+`value=None` succeeds without writing. This is a value comparison, so it does not
+detect a value changing away and back (the ABA problem). It is not a multi-key
+transaction or a cross-process concurrency mechanism.
+
+Run `python3 -m examples.concurrent_counter` to watch eight threads produce 800
+increments and verify the result after reopening.
+
+```sh
+python3 -m kvstore cas counter --absent --value 0
+python3 -m kvstore cas counter --expected 0 --value 1
+python3 -m kvstore scan --prefix user: --limit 20
+python3 -m kvstore scan --prefix user: --after user:020 --limit 20
+python3 -m kvstore batch operations.json
+```
+
+`operations.json` contains a JSON array, for example:
+
+```json
+[["put", "user:001", "Ada"], ["put", "user:002", "Grace"], ["delete", "pending"]]
+```
+
+Use `batch -` to read JSON from stdin. The entire batch is validated before opening
+storage and committed as one checksummed WAL record with one fsync; the existing
+16 MiB record limit applies. CAS exits with status 3 on a mismatch, 0 on success,
+and 1 on a storage/validation error.
+
+`db.scan(prefix="user:", after=None, limit=20)` returns sorted key-value pairs.
+The CLI wraps these in `items` and `next_after`. Pass `next_after` back as `--after`
+until it is null; a full final page may require one extra empty request. Keys are
+sorted in Python Unicode order. Only selected values are read, but each call still
+sorts all keys in memory (O(n log n)). Pages are individually consistent under the
+mutex; changes between calls are visible and pagination is not a snapshot.
+
 ## Architecture
 
 ```text
@@ -117,7 +166,7 @@ python3 -m examples.crash_matrix
 python3 -m examples.benchmark --count 1000 --value-bytes 1024 --repeats 3
 ```
 
-The 26 tests include a seeded workload of 1,500 batches compared with a reference
+The 36 tests include a seeded workload of 1,500 batches compared with a reference
 dictionary after each batch, with repeated compaction and reopening. A separate
 crash matrix kills subprocesses at six append/compaction checkpoints. The original
 byte-by-byte torn-batch tests, corruption tests, and locking tests remain included.

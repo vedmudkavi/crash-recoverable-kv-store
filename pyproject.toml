@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crash-recoverable-kv-store"
-version = "0.2.0"
+version = "0.3.0"
 description = "A crash-recoverable Python key-value database built from first principles"
 requires-python = ">=3.10"
 classifiers = ["Programming Language :: Python :: 3", "Operating System :: POSIX"]

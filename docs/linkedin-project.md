@@ -5,9 +5,9 @@
 **Description:**
 Built a persistent key-value storage engine in Python with a checksummed
 write-ahead log, disk-backed reads, an in-memory key-to-offset index, atomic
-batch writes, and log compaction. Added a non-mutating storage inspector and a
+batch writes, conditional compare-and-swap updates, paginated prefix scans, and log compaction. Added a non-mutating storage inspector and a
 failure-testing harness that kills worker processes at six persistence
-checkpoints and verifies recovery. Validated behavior with 26 automated tests,
+checkpoints and verifies recovery. Validated behavior with 36 automated tests,
 including 1,500 randomized batches checked against a reference model, and
 created reproducible benchmarks for commit latency, read throughput, recovery,
 and memory use. Uses Python's standard library with no external database engine.

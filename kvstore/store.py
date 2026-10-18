@@ -184,6 +184,52 @@ class Database:
             self._check()
             return self._read_value(key)
 
+    def compare_and_swap(self, key, expected, value):
+        """Durably replace a value only if it matches expected.
+
+        expected=None requires an absent key; value=None deletes the key.
+        Returns False without writing on a mismatch. The comparison and commit
+        share the instance mutex, preventing lost updates between threads.
+        """
+        if not isinstance(key, str):
+            raise TypeError('Keys must be strings')
+        if expected is not None and not isinstance(expected, str):
+            raise TypeError('Expected value must be a string or None')
+        if value is not None and not isinstance(value, str):
+            raise TypeError('New value must be a string or None')
+        with self._mutex:
+            self._check()
+            current = self._read_value(key) if key in self._index else None
+            if current != expected:
+                return False
+            if value is None:
+                if current is not None:
+                    self.delete(key)
+            else:
+                self.put(key, value)
+            return True
+
+    def scan(self, prefix='', *, after=None, limit=100):
+        """Return a sorted page of matching pairs after an exclusive key cursor.
+
+        Pages are consistent individually, not snapshots across multiple calls.
+        Keys are sorted in memory; only values in the selected page are read.
+        """
+        if not isinstance(prefix, str) or (after is not None and not isinstance(after, str)):
+            raise TypeError('Prefix and cursor must be strings')
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError('Limit must be a positive integer')
+        with self._mutex:
+            self._check()
+            keys = (key for key in sorted(self._index)
+                    if key.startswith(prefix) and (after is None or key > after))
+            result = []
+            for key in keys:
+                result.append((key, self._read_value(key)))
+                if len(result) == limit:
+                    break
+            return result
+
     def items(self):
         with self._mutex:
             self._check()

@@ -21,6 +21,8 @@ def main():
         commands.add_parser(name)
     scan = commands.add_parser('scan', help='read a sorted page of matching keys')
     scan.add_argument('--prefix', default='')
+    scan.add_argument('--reverse', action='store_true')
+    commands.add_parser('get-many', help='read keys in one request; null for missing').add_argument('keys', nargs='+')
     scan.add_argument('--after', default=None, help='exclusive key cursor')
     scan.add_argument('--limit', type=int, default=100)
     batch = commands.add_parser('batch', help='commit a JSON operation array atomically')
@@ -58,6 +60,8 @@ def main():
             if args.command == 'put':
                 db.put(args.key, args.value)
                 print('Stored and synced.')
+            elif args.command == 'get-many':
+                print(json.dumps(db.get_many(args.keys), ensure_ascii=False))
             elif args.command == 'get':
                 print(db.get(args.key))
             elif args.command == 'delete':
@@ -73,7 +77,7 @@ def main():
                 print('Condition matched; commit complete.' if changed else 'Value mismatch; no write performed.')
                 return 0 if changed else 3
             elif args.command == 'scan':
-                page = db.scan(args.prefix, after=args.after, limit=args.limit)
+                page = db.scan(args.prefix, after=args.after, limit=args.limit, reverse=args.reverse)
                 print(json.dumps(dict(items=page, next_after=page[-1][0] if len(page) == args.limit else None),
                                  indent=2, ensure_ascii=False))
             elif args.command == 'backup':

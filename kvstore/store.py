@@ -1,6 +1,7 @@
 """A single-process, durable, append-only key-value store for POSIX systems."""
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 import fcntl
 import json
 import os
@@ -56,6 +57,7 @@ class Database:
         self._closed = False
         self._failed = False
         self._index = {}
+        self._sorted_keys = None
         self.recovered_records = 0
         self.discarded_tail_bytes = 0
         self._lock = open(self.directory / 'LOCK', 'a+b')
@@ -92,12 +94,15 @@ class Database:
     def _apply(self, ops, offset, size):
         for position, op in enumerate(ops):
             if op[0] == 'put':
+                if op[1] not in self._index:
+                    self._sorted_keys = None
                 self._index[op[1]] = (offset, size, position)
             else:
+                if op[1] in self._index:
+                    self._sorted_keys = None
                 self._index.pop(op[1], None)
 
-    def _read_value(self, key):
-        offset, size, position = self._index[key]
+    def _read_frame(self, offset, size):
         # pread does not move the append/recovery file cursor.
         record = os.pread(self._log.fileno(), size, offset)
         if len(record) != size:
@@ -109,12 +114,51 @@ class Database:
         try:
             ops = json.loads(payload)
             _validate(ops)
+            return ops
+        except (ValueError, TypeError, IndexError, UnicodeError) as exc:
+            raise CorruptionError(f'Invalid indexed record at byte {offset}') from exc
+
+    @staticmethod
+    def _indexed_value(ops, position, key):
+        try:
             op = ops[position]
             if op[0] != 'put' or op[1] != key:
                 raise ValueError('Index does not match record')
             return op[2]
-        except (ValueError, TypeError, IndexError, UnicodeError) as exc:
-            raise CorruptionError(f'Invalid indexed record at byte {offset}') from exc
+        except (IndexError, ValueError) as exc:
+            raise CorruptionError('Index does not match record') from exc
+
+    def _read_value(self, key):
+        offset, size, position = self._index[key]
+        return self._indexed_value(self._read_frame(offset, size), position, key)
+
+    def get_many(self, keys):
+        """Return values in input order (including duplicates), None for missing keys.
+
+        Read each referenced frame once. Decoded frames are not cached across
+        requests; at most one frame is decoded at a time in addition to results.
+        """
+        keys = list(keys)
+        if any(not isinstance(key, str) for key in keys):
+            raise TypeError('Keys must be strings')
+        with self._mutex:
+            self._check()
+            groups = {}
+            result = [None] * len(keys)
+            for index, key in enumerate(keys):
+                if key in self._index:
+                    offset, size, position = self._index[key]
+                    groups.setdefault((offset, size), []).append((index, position, key))
+            for (offset, size), requests in groups.items():
+                ops = self._read_frame(offset, size)
+                for index, position, key in requests:
+                    result[index] = self._indexed_value(ops, position, key)
+            return result
+
+    def _ordered_keys(self):
+        if self._sorted_keys is None:
+            self._sorted_keys = sorted(self._index)
+        return self._sorted_keys
 
     def _recover(self):
         self._log.seek(0)
@@ -209,26 +253,38 @@ class Database:
                 self.put(key, value)
             return True
 
-    def scan(self, prefix='', *, after=None, limit=100):
-        """Return a sorted page of matching pairs after an exclusive key cursor.
+    def scan(self, prefix='', *, after=None, limit=100, reverse=False):
+        """Read a page using a cached sorted key list and binary-search bounds.
 
-        Pages are consistent individually, not snapshots across multiple calls.
-        Keys are sorted in memory; only values in the selected page are read.
+        after is exclusive in traversal order (less than after when reversing).
+        Pages are individually consistent, not snapshots across calls.
         """
         if not isinstance(prefix, str) or (after is not None and not isinstance(after, str)):
             raise TypeError('Prefix and cursor must be strings')
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError('Limit must be a positive integer')
+        if not isinstance(reverse, bool):
+            raise TypeError('reverse must be a boolean')
         with self._mutex:
             self._check()
-            keys = (key for key in sorted(self._index)
-                    if key.startswith(prefix) and (after is None or key > after))
-            result = []
-            for key in keys:
-                result.append((key, self._read_value(key)))
-                if len(result) == limit:
+            keys = self._ordered_keys()
+            lo = bisect_left(keys, prefix)
+            # Unicode lexical successor, including prefixes ending in U+10FFFF.
+            upper = None
+            for i in range(len(prefix) - 1, -1, -1):
+                if ord(prefix[i]) < 0x10ffff:
+                    upper = prefix[:i] + chr(ord(prefix[i]) + 1)
                     break
-            return result
+            hi = len(keys) if upper is None else bisect_left(keys, upper)
+            if reverse:
+                if after is not None:
+                    hi = min(hi, bisect_left(keys, after))
+                selected = list(reversed(keys[max(lo, hi-limit):hi])) if hi > lo else []
+            else:
+                if after is not None:
+                    lo = max(lo, bisect_right(keys, after))
+                selected = keys[lo:min(hi, lo+limit)] if lo < hi else []
+            return list(zip(selected, self.get_many(selected)))
 
     def items(self):
         with self._mutex:
@@ -238,7 +294,12 @@ class Database:
     def stats(self):
         with self._mutex:
             self._check()
-            return dict(keys=len(self._index), index_mode='disk-offsets', wal_bytes=os.fstat(self._log.fileno()).st_size,
+            wal_bytes = os.fstat(self._log.fileno()).st_size
+            referenced_bytes = sum(size for offset, size in
+                                   {(ref[0], ref[1]) for ref in self._index.values()})
+            return dict(keys=len(self._index), index_mode='disk-offsets', wal_bytes=wal_bytes,
+                        referenced_frame_bytes=referenced_bytes,
+                        obsolete_frame_bytes=wal_bytes-referenced_bytes,
                         recovered_records=self.recovered_records,
                         discarded_tail_bytes=self.discarded_tail_bytes)
 

@@ -69,7 +69,7 @@ class OperationTests(unittest.TestCase):
         with Database(self.path) as db:
             for key in ['user:α', 'user:3', 'other:1', 'user:1', 'user:2']:
                 db.put(key, key)
-            with patch.object(db, '_read_value', wraps=db._read_value) as read:
+            with patch.object(db, '_read_frame', wraps=db._read_frame) as read:
                 first = db.scan('user:', limit=2)
                 self.assertEqual([k for k,v in first], ['user:1','user:2'])
                 self.assertEqual(read.call_count, 2)

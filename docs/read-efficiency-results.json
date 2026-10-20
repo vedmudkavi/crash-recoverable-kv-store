@@ -1,0 +1,7 @@
+{
+  "keys": 100,
+  "wal_frames": 1,
+  "individual_pread_calls": 100,
+  "get_many_pread_calls": 1,
+  "scan_key_cache_reused": true
+}

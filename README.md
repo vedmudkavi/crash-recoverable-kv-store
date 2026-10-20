@@ -117,9 +117,38 @@ and 1 on a storage/validation error.
 `db.scan(prefix="user:", after=None, limit=20)` returns sorted key-value pairs.
 The CLI wraps these in `items` and `next_after`. Pass `next_after` back as `--after`
 until it is null; a full final page may require one extra empty request. Keys are
-sorted in Python Unicode order. Only selected values are read, but each call still
-sorts all keys in memory (O(n log n)). Pages are individually consistent under the
+sorted in Python Unicode order. Only selected values are read. The first scan after keys are added/deleted sorts
+the key list (O(n log n)); later pages reuse it and use binary search. Updating an
+existing value does not rebuild this cache. The cache adds O(n) key references. Pages are individually consistent under the
 mutex; changes between calls are visible and pagination is not a snapshot.
+
+## Batched reads and reverse traversal
+
+```python
+values = db.get_many(["user:001", "missing", "user:001"])
+page = db.scan("user:", limit=20, reverse=True)
+```
+
+```sh
+python3 -m kvstore get-many user:001 user:002 missing
+python3 -m kvstore scan --prefix user: --reverse --limit 20
+python3 -m examples.read_efficiency
+```
+
+`get_many` returns one value per input key in input order, including duplicates;
+missing keys return `None` (`null` in the CLI). Keys in a shared WAL frame require
+only one read/checksum/decode per request. Results are consistent under the mutex.
+The result list uses memory proportional to returned values; decoded frames are
+not retained between requests. Reverse scans use an exclusive `after` cursor in
+descending order; pass the last key of the prior page to continue.
+
+`stats` reports `referenced_frame_bytes` and `obsolete_frame_bytes`. Shared batch
+frames count once; a frame stays referenced while any of its keys remain live.
+These figures describe current frames, not exact expected compaction savings.
+
+See [research and design decisions](docs/storage-engine-research.md) for the
+RocksDB, RoseDB, Bitcask, and SQLite references behind these choices, measured
+read-call reductions, limitations, and deliberately deferred features.
 
 ## Consistent backups and verified restore
 
@@ -201,7 +230,7 @@ python3 -m examples.crash_matrix
 python3 -m examples.benchmark --count 1000 --value-bytes 1024 --repeats 3
 ```
 
-The 48 tests include a seeded workload of 1,500 batches compared with a reference
+The 57 tests include a seeded workload of 1,500 batches compared with a reference
 dictionary after each batch, with repeated compaction and reopening. A separate
 crash matrix kills subprocesses at six append/compaction checkpoints. The original
 byte-by-byte torn-batch tests, corruption tests, and locking tests remain included.

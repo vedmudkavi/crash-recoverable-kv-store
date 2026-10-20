@@ -16,3 +16,4 @@ jobs:
       - run: python -m examples.crash_demo
       - run: python -m examples.crash_matrix
       - run: python -m examples.concurrent_counter
+      - run: python -m examples.backup_restore

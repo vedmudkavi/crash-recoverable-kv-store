@@ -121,6 +121,41 @@ sorted in Python Unicode order. Only selected values are read, but each call sti
 sorts all keys in memory (O(n log n)). Pages are individually consistent under the
 mutex; changes between calls are visible and pagination is not a snapshot.
 
+## Consistent backups and verified restore
+
+```sh
+python3 -m kvstore --db .kvstore backup snapshot.kvb
+python3 -m kvstore --db restored-db restore snapshot.kvb
+python3 -m kvstore --db restored-db list
+python3 -m examples.backup_restore
+```
+
+In Python, call `db.backup("snapshot.kvb")`, then
+`restore_backup("snapshot.kvb", "restored-db")` from `kvstore.backup`.
+Backup holds the instance mutex while streaming the latest live values, so a
+snapshot cannot observe half of a concurrent batch. Historical values and deleted
+keys are excluded. Only one record's values need decoding at a time; all keys are
+still sorted in memory. Writes and reads on that instance wait during backup.
+
+The versioned file contains a key count, per-record CRC32 checksums, and a SHA-256
+digest of all records. Restore validates the complete file, including sorted unique
+keys, before reserving its destination. Truncated snapshots are rejected rather
+than repaired. SHA-256 detects accidental damage; the snapshot is not signed or
+encrypted and contains your stored values.
+
+Backup publishes via an atomic hard link and never replaces an existing path.
+Restore refuses any existing destination, even an empty directory. Parent
+directories must already exist. Both operations use temporary files on the target
+filesystem and sync before returning. Local POSIX filesystems with hard-link
+support are required. Temporary files may remain after a process kill.
+
+A crash during restore publication can leave a reserved destination directory
+without a WAL; retry using a fresh destination. Do not open the destination with
+another process until restore finishes. An error after publication (such as a
+failed directory sync) has an uncertain durability outcome and may leave a complete
+backup/restored database. Inspect it before retrying; existing paths are not
+silently overwritten. These semantics do not establish hardware power-loss safety.
+
 ## Architecture
 
 ```text
@@ -166,7 +201,7 @@ python3 -m examples.crash_matrix
 python3 -m examples.benchmark --count 1000 --value-bytes 1024 --repeats 3
 ```
 
-The 36 tests include a seeded workload of 1,500 batches compared with a reference
+The 48 tests include a seeded workload of 1,500 batches compared with a reference
 dictionary after each batch, with repeated compaction and reopening. A separate
 crash matrix kills subprocesses at six append/compaction checkpoints. The original
 byte-by-byte torn-batch tests, corruption tests, and locking tests remain included.

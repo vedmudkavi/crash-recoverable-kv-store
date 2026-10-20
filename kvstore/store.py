@@ -242,6 +242,13 @@ class Database:
                         recovered_records=self.recovered_records,
                         discarded_tail_bytes=self.discarded_tail_bytes)
 
+    def backup(self, destination):
+        """Create a consistent portable snapshot; never overwrite an existing file."""
+        from .backup import write_backup
+        with self._mutex:
+            self._check()
+            return write_backup(self, destination)
+
     def compact(self):
         """Atomically replace history with a durable snapshot of live keys."""
         with self._mutex:

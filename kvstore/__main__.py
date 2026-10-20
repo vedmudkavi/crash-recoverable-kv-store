@@ -4,6 +4,7 @@ import sys
 
 from . import CorruptionError, Database, DatabaseLocked
 from .inspect import inspect_log
+from .backup import restore_backup
 from .store import _validate, _encode
 
 
@@ -32,8 +33,13 @@ def main():
     replacement = cas.add_mutually_exclusive_group(required=True)
     replacement.add_argument('--value')
     replacement.add_argument('--delete', action='store_true')
+    commands.add_parser('backup', help='create a consistent snapshot file').add_argument('file')
+    commands.add_parser('restore', help='restore a snapshot into a NEW --db directory').add_argument('file')
     args = parser.parse_args()
     try:
+        if args.command == 'restore':
+            print(json.dumps(restore_backup(args.file, args.db), indent=2))
+            return 0
         if args.command == 'inspect':
             report = inspect_log(args.db)
             print(json.dumps(report, indent=2))
@@ -70,6 +76,8 @@ def main():
                 page = db.scan(args.prefix, after=args.after, limit=args.limit)
                 print(json.dumps(dict(items=page, next_after=page[-1][0] if len(page) == args.limit else None),
                                  indent=2, ensure_ascii=False))
+            elif args.command == 'backup':
+                print(json.dumps(db.backup(args.file), indent=2))
             elif args.command == 'stats':
                 print(json.dumps(db.stats(), indent=2))
             else:
